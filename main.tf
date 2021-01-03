@@ -6,20 +6,6 @@ data "aws_iam_role" "ecr" {
   name = "AWSServiceRoleForECRReplication"
 }
 
-resource "aws_default_vpc" "default" {
-  tags = {
-    Name = "Default VPC"
-  }
-}
-
-resource "aws_default_subnet" "default_az1" {
-  availability_zone = "us-east-1a"
-
-  tags = {
-    Name = "Default subnet for us-east-1a"
-  }
-}
-
 module "label" {
   source     = "git::https://github.com/cloudposse/terraform-null-label.git?ref=master"
   namespace  = "everlook"
@@ -49,7 +35,7 @@ resource "aws_ecs_task_definition" "node" {
   memory                   = var.task_memory
   execution_role_arn       = data.aws_iam_role.ecs_task_execution_role.arn
 
-  container_definitions = <<DEFINITION
+  container_definitions    = <<DEFINITION
 [
   {
     "cpu": ${var.task_cpu},
@@ -60,7 +46,13 @@ resource "aws_ecs_task_definition" "node" {
     "essential": true,
     "image": "${module.ecr.repository_url}:latest",
     "memory": ${var.task_memory},
-    "name": "node-ecr"
+    "name": "node-ecr",
+    "portMappings": [
+      {
+        "containerPort": 8080,
+        "hostPort": 8080
+      }
+    ]
   }
 ]
 DEFINITION
@@ -68,6 +60,28 @@ DEFINITION
 
 resource "aws_ecs_cluster" "default" {
   name = module.label.id
+}
+
+resource "aws_default_vpc" "default" {
+  tags = {
+    Name = "Default VPC"
+  }
+}
+
+resource "aws_default_subnet" "default_az1" {
+  availability_zone = "us-east-1a"
+
+  tags = {
+    Name = "Default subnet for us-east-1a"
+  }
+}
+
+resource "aws_lb_target_group" "node" {
+  name        = "node-ecr-lb-tg"
+  port        = 80
+  protocol    = "HTTP"
+  vpc_id      = aws_default_vpc.default.id
+  target_type = "ip"
 }
 
 resource "aws_ecs_service" "node" {
@@ -79,11 +93,11 @@ resource "aws_ecs_service" "node" {
   desired_count                      = 2
   launch_type                        = var.ecs_launch_type
 
-  # load_balancer {
-  #   target_group_arn = aws_lb_target_group.foo.arn
-  #   container_name   = "mongo"
-  #   container_port   = 8080
-  # }
+  load_balancer {
+    target_group_arn = aws_lb_target_group.node.arn
+    container_name   = "node-ecr"
+    container_port   = 8080
+  }
 
   network_configuration {
     subnets = [aws_default_subnet.default_az1.id]
