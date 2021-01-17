@@ -15,6 +15,87 @@ module "label" {
   delimiter  = "-"
 }
 
+resource "aws_vpc" "main" {
+  cidr_block           = "10.10.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "main"
+  }
+}
+
+resource "aws_internet_gateway" "gw" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "main"
+  }
+}
+
+resource "aws_route_table" "r" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.gw1.id
+  }
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.gw2.id
+  }
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.gw.id
+  }
+}
+
+resource "aws_nat_gateway" "gw1" {
+  allocation_id = aws_eip.nat1.id
+  subnet_id     = aws_subnet.public_az1.id
+}
+
+resource "aws_nat_gateway" "gw2" {
+  allocation_id = aws_eip.nat2.id
+  subnet_id     = aws_subnet.public_az2.id
+}
+
+resource "aws_eip" "nat1" {
+  vpc = true
+
+  depends_on = [aws_lb.alb]
+}
+
+resource "aws_eip" "nat2" {
+  vpc = true
+
+  depends_on = [aws_lb.alb]
+}
+
+resource "aws_subnet" "public_az1" {
+  availability_zone       = "us-east-1a"
+  map_public_ip_on_launch = true
+  cidr_block              = "10.10.10.0/24"
+  vpc_id                  = aws_vpc.main.id
+
+  tags = {
+    Name = "Default subnet for us-east-1a"
+  }
+}
+
+resource "aws_subnet" "public_az2" {
+  availability_zone       = "us-east-1b"
+  map_public_ip_on_launch = true
+  cidr_block              = "10.10.20.0/24"
+  vpc_id                  = aws_vpc.main.id
+
+  tags = {
+    Name = "Default subnet for us-east-1b"
+  }
+}
+
 module "ecr" {
   source                 = "git::https://github.com/cloudposse/terraform-aws-ecr.git?ref=master"
   namespace              = module.label.namespace
@@ -25,6 +106,10 @@ module "ecr" {
 
 data "aws_iam_role" "ecs_task_execution_role" {
   name = "ecsTaskExecutionRole"
+}
+
+resource "aws_cloudwatch_log_group" "node-ecs" {
+  name = "node-ecs"
 }
 
 resource "aws_ecs_task_definition" "node" {
@@ -52,7 +137,15 @@ resource "aws_ecs_task_definition" "node" {
         "containerPort": 80,
         "hostPort": 80
       }
-    ]
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-region": "${var.region}",
+        "awslogs-group": "${aws_cloudwatch_log_group.node-ecs.id}",
+        "awslogs-stream-prefix": "ecs"
+      }
+    }
   }
 ]
 DEFINITION
@@ -62,32 +155,8 @@ resource "aws_ecs_cluster" "default" {
   name = module.label.id
 }
 
-resource "aws_default_vpc" "default" {
-  tags = {
-    Name = "Default VPC"
-  }
-}
-
-resource "aws_default_subnet" "az1" {
-  availability_zone       = "us-east-1a"
-  map_public_ip_on_launch = true
-
-  tags = {
-    Name = "Default subnet for us-east-1a"
-  }
-}
-
-resource "aws_default_subnet" "az2" {
-  availability_zone       = "us-east-1b"
-  map_public_ip_on_launch = true
-
-  tags = {
-    Name = "Default subnet for us-east-1b"
-  }
-}
-
 resource "aws_default_security_group" "ecs_sec" {
-  vpc_id = aws_default_vpc.default.id
+  vpc_id = aws_vpc.main.id
 
   ingress {
     protocol         = "tcp"
@@ -99,14 +168,14 @@ resource "aws_default_security_group" "ecs_sec" {
 resource "aws_security_group" "alb" {
   name        = "allow_tls"
   description = "Allow TLS inbound traffic"
-  vpc_id      = aws_default_vpc.default.id
+  vpc_id      = aws_vpc.main.id
 
   ingress {
     description = "TLS from VPC"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [aws_default_vpc.default.cidr_block]
+    cidr_blocks = [aws_vpc.main.cidr_block]
   }
 
   egress {
@@ -124,14 +193,14 @@ resource "aws_security_group" "alb" {
 resource "aws_security_group" "alb_sg" {
   name        = "alb_sg"
   description = "Security group for load balancer"
-  vpc_id      = aws_default_vpc.default.id
+  vpc_id      = aws_vpc.main.id
 
   ingress {
     description = "TLS from VPC"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [aws_default_vpc.default.cidr_block]
+    cidr_blocks = [aws_vpc.main.cidr_block]
   }
 }
 
@@ -140,14 +209,14 @@ resource "aws_lb" "alb" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
-  subnets            = [aws_default_subnet.az1.id, aws_default_subnet.az2.id]
+  subnets            = [aws_subnet.public_az1.id, aws_subnet.public_az2.id]
 }
 
 resource "aws_lb_target_group" alb {
   name        = "alb-target-group"
   port        = 80
   protocol    = "HTTP"
-  vpc_id      = aws_default_vpc.default.id
+  vpc_id      = aws_vpc.main.id
   target_type = "ip"
 
   depends_on = [aws_lb.alb]
@@ -182,7 +251,7 @@ resource "aws_ecs_service" "node" {
 
   network_configuration {
     assign_public_ip = true
-    subnets          = [aws_default_subnet.az1.id, aws_default_subnet.az2.id]
+    subnets          = [aws_subnet.public_az1.id, aws_subnet.public_az2.id]
     security_groups  = [aws_default_security_group.ecs_sec.id]
   }
 }
