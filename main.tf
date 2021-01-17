@@ -49,8 +49,8 @@ resource "aws_ecs_task_definition" "node" {
     "name": "node-ecs",
     "portMappings": [
       {
-        "containerPort": 8080,
-        "hostPort": 8080
+        "containerPort": 80,
+        "hostPort": 80
       }
     ]
   }
@@ -86,43 +86,81 @@ resource "aws_default_subnet" "az2" {
   }
 }
 
-resource "aws_default_security_group" "lb_sg" {
+resource "aws_default_security_group" "ecs_sec" {
   vpc_id = aws_default_vpc.default.id
 
   ingress {
-    protocol  = -1
-    self      = true
-    from_port = 0
-    to_port   = 0
+    protocol         = "tcp"
+    from_port        = 80
+    to_port          = 80
   }
 }
 
-resource "aws_lb" "ecs" {
-  name               = "ecs-lb"
+resource "aws_security_group" "alb" {
+  name        = "allow_tls"
+  description = "Allow TLS inbound traffic"
+  vpc_id      = aws_default_vpc.default.id
+
+  ingress {
+    description = "TLS from VPC"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [aws_default_vpc.default.cidr_block]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "allow_tls"
+  }
+}
+
+resource "aws_security_group" "alb_sg" {
+  name        = "alb_sg"
+  description = "Security group for load balancer"
+  vpc_id      = aws_default_vpc.default.id
+
+  ingress {
+    description = "TLS from VPC"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [aws_default_vpc.default.cidr_block]
+  }
+}
+
+resource "aws_lb" "alb" {
+  name               = "alb"
   internal           = false
   load_balancer_type = "application"
-  security_groups    = [aws_default_security_group.lb_sg.id]
+  security_groups    = [aws_security_group.alb_sg.id]
   subnets            = [aws_default_subnet.az1.id, aws_default_subnet.az2.id]
 }
 
-resource "aws_lb_target_group" "ecs" {
-  name        = "node-ecs-lb-tg"
+resource "aws_lb_target_group" alb {
+  name        = "alb-target-group"
   port        = 80
   protocol    = "HTTP"
   vpc_id      = aws_default_vpc.default.id
   target_type = "ip"
 
-  depends_on = [aws_lb.ecs]
+  depends_on = [aws_lb.alb]
 }
 
-resource "aws_lb_listener" "default" {
-  load_balancer_arn = aws_lb.ecs.arn
+resource "aws_lb_listener" "alb" {
+  load_balancer_arn = aws_lb.alb.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.ecs.arn
+    target_group_arn = aws_lb_target_group.alb.arn
   }
 }
 
@@ -134,15 +172,17 @@ resource "aws_ecs_service" "node" {
   deployment_minimum_healthy_percent = var.deployment_minimum_healthy_percent 
   desired_count                      = 2
   launch_type                        = var.ecs_launch_type
-  depends_on                         = [aws_lb_target_group.ecs]
+  depends_on                         = [aws_lb_target_group.alb]
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.ecs.arn
+    target_group_arn = aws_lb_target_group.alb.arn
     container_name   = "node-ecs"
-    container_port   = 8080
+    container_port   = 80
   }
 
   network_configuration {
-    subnets = [aws_default_subnet.az1.id]
+    assign_public_ip = true
+    subnets          = [aws_default_subnet.az1.id, aws_default_subnet.az2.id]
+    security_groups  = [aws_default_security_group.ecs_sec.id]
   }
 }

@@ -1,10 +1,11 @@
-FROM ubuntu
 FROM node:14.15.3-alpine3.10
-
-COPY . .
 
 WORKDIR /usr/src/app
 
-EXPOSE 8008
+COPY . .
+
+RUN npm i
+
+EXPOSE 80
 
 CMD ["npm", "start"]
