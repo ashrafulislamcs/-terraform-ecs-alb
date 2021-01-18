@@ -16,9 +16,7 @@ module "label" {
 }
 
 resource "aws_vpc" "main" {
-  cidr_block           = "10.10.0.0/16"
-  enable_dns_support   = true
-  enable_dns_hostnames = true
+  cidr_block = "10.10.0.0/16"
 
   tags = {
     Name = "main"
@@ -33,18 +31,8 @@ resource "aws_internet_gateway" "gw" {
   }
 }
 
-resource "aws_route_table" "r" {
+resource "aws_route_table" "gw" {
   vpc_id = aws_vpc.main.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.gw1.id
-  }
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.gw2.id
-  }
 
   route {
     cidr_block = "0.0.0.0/0"
@@ -52,14 +40,14 @@ resource "aws_route_table" "r" {
   }
 }
 
-resource "aws_nat_gateway" "gw1" {
-  allocation_id = aws_eip.nat1.id
-  subnet_id     = aws_subnet.public_az1.id
+resource "aws_route_table_association" "a1" {
+  subnet_id      = aws_subnet.public_az1.id
+  route_table_id = aws_route_table.gw.id
 }
 
-resource "aws_nat_gateway" "gw2" {
-  allocation_id = aws_eip.nat2.id
-  subnet_id     = aws_subnet.public_az2.id
+resource "aws_route_table_association" "a2" {
+  subnet_id      = aws_subnet.public_az2.id
+  route_table_id = aws_route_table.gw.id
 }
 
 resource "aws_eip" "nat1" {
@@ -155,18 +143,8 @@ resource "aws_ecs_cluster" "default" {
   name = module.label.id
 }
 
-resource "aws_default_security_group" "ecs_sec" {
-  vpc_id = aws_vpc.main.id
-
-  ingress {
-    protocol         = "tcp"
-    from_port        = 80
-    to_port          = 80
-  }
-}
-
-resource "aws_security_group" "alb" {
-  name        = "allow_tls"
+resource "aws_security_group" "ecs_service" {
+  name        = "ECS service sec group"
   description = "Allow TLS inbound traffic"
   vpc_id      = aws_vpc.main.id
 
@@ -175,7 +153,14 @@ resource "aws_security_group" "alb" {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = [aws_vpc.main.cidr_block]
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port = -1
+    to_port = -1
+    protocol = "icmp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -191,7 +176,7 @@ resource "aws_security_group" "alb" {
 }
 
 resource "aws_security_group" "alb_sg" {
-  name        = "alb_sg"
+  name        = "ECS alb sec group"
   description = "Security group for load balancer"
   vpc_id      = aws_vpc.main.id
 
@@ -201,6 +186,13 @@ resource "aws_security_group" "alb_sg" {
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = [aws_vpc.main.cidr_block]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
@@ -252,6 +244,6 @@ resource "aws_ecs_service" "node" {
   network_configuration {
     assign_public_ip = true
     subnets          = [aws_subnet.public_az1.id, aws_subnet.public_az2.id]
-    security_groups  = [aws_default_security_group.ecs_sec.id]
+    security_groups  = [aws_security_group.ecs_service.id]
   }
 }
