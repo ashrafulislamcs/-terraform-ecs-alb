@@ -15,7 +15,7 @@ app.use(bodyParser.json());
 app.get('/', (req, res) => {
   log('Incoming request:', req.path);
 
-  res.json({ success: 'This is new' });
+  res.json({ success: 'This is newer' });
 });
 
 app.listen(PORT, () => {
