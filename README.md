@@ -29,3 +29,17 @@ This uses the `deployment_minimum_healthy_percent` and `deployment_maximum_perce
 ## Architecture
 
 ![Overview](./ecs.png)
+
+## Deploying Locally
+
+To test / deploy, run:
+
+```bash
+terraform apply
+```
+
+To destroy, run:
+
+```bash
+terraform destroy
+```
