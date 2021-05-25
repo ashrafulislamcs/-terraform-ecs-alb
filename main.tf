@@ -149,9 +149,11 @@ resource "aws_security_group" "ecs_service" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "TLS from VPC"
-    from_port   = 80
-    to_port     = 80
+    # Load balancer forwards traffic to this port on our ecs service...
+    # So we need to allow this ingress.
+    description = "HTTP"
+    from_port   = 3000
+    to_port     = 3000
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -181,9 +183,17 @@ resource "aws_security_group" "alb_sg" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "TLS from VPC"
+    description = "HTTP"
     from_port   = 80
     to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -201,8 +211,28 @@ resource "aws_lb" "alb" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg.id]
+
+  ## load balancer is exposed to public subnets while internal services are behind private subnets
   subnets            = [aws_subnet.public_az1.id, aws_subnet.public_az2.id]
 }
+
+# @TODO: Enable for https
+# resource "aws_acm_certificate" "cert" {
+#   domain_name       = "test.myapp.io"
+#   validation_method = "EMAIL" # sends an email for validation approval
+
+#   tags = {
+#     Environment = "test-cert"
+#   }
+
+#   lifecycle {
+#     create_before_destroy = true
+#   }
+
+#   domain_validation_options {
+#     domain_name = "test.myapp.io'"
+#   }
+# }
 
 resource "aws_lb_target_group" alb {
   name        = "alb-target-group"
@@ -214,7 +244,41 @@ resource "aws_lb_target_group" alb {
   depends_on = [aws_lb.alb]
 }
 
-resource "aws_lb_listener" "alb" {
+# @TODO: Enable for https
+# resource "aws_lb_listener" "alb_https" {
+#   load_balancer_arn = aws_lb.alb.arn
+#   port              = 443
+#   protocol          = "HTTPS"
+
+#   certificate_arn   = aws_acm_certificate.cert.arn
+
+#   default_action {
+#     type             = "forward"
+#     target_group_arn = aws_lb_target_group.alb.arn
+#   }
+# }
+
+resource "aws_lb_listener" "alb_http" {
+  load_balancer_arn = aws_lb.alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+
+    # @TODO: DISABLE for https
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.alb.arn
+
+    # @TODO: Enable for https
+    # redirect {
+    #   port        = "443"
+    #   protocol    = "HTTPS"
+    #   status_code = "HTTP_301"
+    # }
+  }
+}
+
+resource "aws_lb_listener" "alb_http" {
   load_balancer_arn = aws_lb.alb.arn
   port              = 80
   protocol          = "HTTP"
@@ -238,11 +302,14 @@ resource "aws_ecs_service" "node" {
   load_balancer {
     target_group_arn = aws_lb_target_group.alb.arn
     container_name   = "node-ecs"
-    container_port   = 80
+    container_port   = 3000
   }
 
   network_configuration {
+    ## Make this false for private subnet config
     assign_public_ip = true
+
+    ## These should be private subnets. Keeping public for now for simplicity.
     subnets          = [aws_subnet.public_az1.id, aws_subnet.public_az2.id]
     security_groups  = [aws_security_group.ecs_service.id]
   }
