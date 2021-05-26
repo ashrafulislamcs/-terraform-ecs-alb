@@ -122,8 +122,8 @@ resource "aws_ecs_task_definition" "node" {
     "name": "node-ecs",
     "portMappings": [
       {
-        "containerPort": 80,
-        "hostPort": 80
+        "containerPort": 3000,
+        "hostPort": 3000
       }
     ],
     "logConfiguration": {
